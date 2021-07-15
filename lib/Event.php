@@ -651,6 +651,22 @@ class Event
         $order = $event->getParameter("ENTITY");
         $values = $event->getParameter("VALUES");
 
+        if (Helper::isAdminSection()) {
+            if (\Bitrix\Main\Loader::includeModule('intensa.logger')) {
+                $logger = new \Intensa\Logger\ILog('OnSaleOrderBeforeSavedHandler');
+                $logger->log('$order->isPaid()', $order->isPaid());
+                $logger->log('$order->getField(\'DATE_PAYED\')', $order->getField('DATE_PAYED'));
+            }
+
+            if ($order->isPaid() && strtotime($order->getField('DATE_PAYED')) < time()) {
+                return new \Bitrix\Main\EventResult(
+                    \Bitrix\Main\EventResult::ERROR,
+                    new \Bitrix\Sale\ResultError(Loc::getMessage("MB_ORDER_CANNOT_BE_CHANGED"), 'SALE_EVENT_WRONG_ORDER'),
+                    'sale'
+                );
+            }
+        }
+
         $isNewOrder = Helper::isNewOrder($values);
 
         if (!$isNewOrder) {
@@ -710,11 +726,17 @@ class Event
             $productBasePrice = Helper::getBasePrice($basketItem);
             $requestedPromotions = Helper::getRequestedPromotions($basketItem, $order);
 
+            if (Helper::isAdminSection()) {
+                $lineId = $basketItem->getProductId();
+            } else {
+                $lineId = $basketItem->getId();
+            }
+
             $arLine = [
                 'lineNumber'       => $i++,
                 'basePricePerItem' => $productBasePrice,
                 'quantity'         => $basketItem->getQuantity(),
-                'lineId'           => $basketItem->getId(),
+                'lineId'           => $lineId,
                 'product'          => [
                     'ids' => [
                         Options::getModuleOption('EXTERNAL_SYSTEM') => Helper::getElementCode($basketItem->getProductId())
@@ -819,18 +841,18 @@ class Event
 
         $orderDTO->setField('order', $arOrder);
 
-        if (!(\Mindbox\Helper::isUnAuthorizedOrder($arUser) || (is_object($USER) && !$USER->IsAuthorized()))) {
+        if (!(\Mindbox\Helper::isUnAuthorizedOrder($arUser) || (is_object($USER) && !$USER->IsAuthorized())) || Helper::isAdminSection()) {
             $customer->setId('mindboxId', $mindboxId);
         }
 
-        if (is_object($USER) && $USER->IsAuthorized() && \Mindbox\Helper::isUnAuthorizedOrder($arUser)) {
+        if (is_object($USER) && $USER->IsAuthorized() && \Mindbox\Helper::isUnAuthorizedOrder($arUser) && !Helper::isAdminSection()) {
             $customer->setId(Options::getModuleOption('WEBSITE_ID'), $USER->GetID());
         }
 
         $orderDTO->setCustomer($customer);
 
         try {
-            if (\Mindbox\Helper::isUnAuthorizedOrder($arUser) || (is_object($USER) && !$USER->IsAuthorized())) {
+            if ((\Mindbox\Helper::isUnAuthorizedOrder($arUser) && !Helper::isAdminSection()) || (is_object($USER) && !$USER->IsAuthorized())) {
                 $createOrderResult = $mindbox->order()->beginUnauthorizedOrderTransaction(
                     $orderDTO,
                     Options::getOperationName('beginUnauthorizedOrderTransaction')
@@ -838,7 +860,7 @@ class Event
             } else {
                 $createOrderResult = $mindbox->order()->beginAuthorizedOrderTransaction(
                     $orderDTO,
-                    Options::getOperationName('beginAuthorizedOrderTransaction')
+                    Options::getOperationName('beginAuthorizedOrderTransaction' . (Helper::isAdminSection()? 'Admin':''))
                 )->sendRequest();
             }
 
@@ -860,7 +882,7 @@ class Event
                     ]);
                     $createOrderResult = $mindbox->order()->rollbackOrderTransaction(
                         $orderDTO,
-                        Options::getOperationName('rollbackOrderTransaction')
+                        Options::getOperationName('rollbackOrderTransaction' . (Helper::isAdminSection()? 'Admin':''))
                     )->sendRequest();
 
                     unset($_SESSION['TOTAL_PRICE']);
@@ -904,7 +926,7 @@ class Event
             ]);
             $mindbox->order()->rollbackOrderTransaction(
                 $orderDTO,
-                Options::getOperationName('rollbackOrderTransaction')
+                Options::getOperationName('rollbackOrderTransaction' . (Helper::isAdminSection()? 'Admin':''))
             )->sendRequest();
 
             unset($_SESSION['TOTAL_PRICE']);
@@ -1107,7 +1129,7 @@ class Event
                 ]);
                 $createOrderResult = $mindbox->order()->commitOrderTransaction(
                     $orderDTO,
-                    Options::getOperationName('commitOrderTransaction')
+                    Options::getOperationName('commitOrderTransaction' . (Helper::isAdminSection()? 'Admin':''))
                 )->sendRequest();
                 unset($_SESSION['MINDBOX_TRANSACTION_ID']);
                 unset($_SESSION['PAY_BONUSES']);
@@ -1396,6 +1418,12 @@ class Event
      */
     public function OnSaleBasketSavedHandler($basket)
     {
+
+        if (\Bitrix\Main\Loader::includeModule('intensa.logger')) {
+            $logger = new \Intensa\Logger\ILog('OnSaleBasketSavedHandler');
+            $logger->log('fire', 1);
+        }
+
         $mindbox = static::mindbox();
         if (!$mindbox) {
             return new Main\EventResult(Main\EventResult::SUCCESS);
@@ -1418,6 +1446,11 @@ class Event
      */
     public function OnBeforeSaleOrderFinalActionHandler($order, $has, $basket)
     {
+
+        if (\Bitrix\Main\Loader::includeModule('intensa.logger')) {
+            $logger = new \Intensa\Logger\ILog('OnBeforeSaleOrderFinalActionHandler');
+            $logger->log('fire', 1);
+        }
 
         if (Helper::isStandardMode()) {
             return new Main\EventResult(Main\EventResult::SUCCESS);
@@ -1448,7 +1481,9 @@ class Event
         $preorder = new \Mindbox\DTO\V3\Requests\PreorderRequestDTO();
 
         foreach ($basketItems as $basketItem) {
-            if (!$basketItem->getId()) {
+            $logger->log('$basketItem productId', $basketItem->getProductId());
+
+            if (!Helper::checkBasketItem($basketItem)) {
                 continue;
             }
 
@@ -1460,10 +1495,17 @@ class Event
             $bitrixBasket[$basketItem->getId()] = $basketItem;
             $catalogPrice = Helper::getBasePrice($basketItem);
 
+            if (Helper::isAdminSection()) {
+                $lineId = $basketItem->getProductId();
+            } else {
+                $lineId = $basketItem->getId();
+            }
+
+
             $arLine = [
                 'basePricePerItem' => $catalogPrice,
                 'quantity'         => $basketItem->getQuantity(),
-                'lineId'           => $basketItem->getId(),
+                'lineId'           => $lineId,
                 'product'          => [
                     'ids' => [
                         Options::getModuleOption('EXTERNAL_SYSTEM') => Helper::getElementCode($basketItem->getProductId())
@@ -1482,6 +1524,8 @@ class Event
 
             $lines[] = $arLine;
         }
+
+        $logger->log('$lines', $lines);
 
         if (empty($lines)) {
             return false;
@@ -1529,7 +1573,7 @@ class Event
             if ($USER->IsAuthorized()) {
                 $preorderInfo = $mindbox->order()->calculateAuthorizedCart(
                     $preorder,
-                    Options::getOperationName('calculateAuthorizedCart')
+                    Options::getOperationName('calculateAuthorizedCart' . (Helper::isAdminSection()? 'Admin':''))
                 )->sendRequest()->getResult()->getField('order');
             } else {
                 $preorderInfo = $mindbox->order()->calculateUnauthorizedCart(

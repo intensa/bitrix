@@ -582,6 +582,7 @@ class Helper
 
     public static function processHlbBasketRule($lineId, $mindboxPrice)
     {
+        \CModule::IncludeModule('highloadblock');
 
         $result = \Bitrix\Highloadblock\HighloadBlockTable::getList(['filter' => ['=NAME' => "Mindbox"]]);
         if ($row = $result->fetch()) {
@@ -1065,5 +1066,30 @@ class Helper
         }
 
         return $isNewOrder;
+    }
+
+    /**
+     * Check if is admin section
+     *
+     * @return boolean
+     */
+    public static function isAdminSection()
+    {
+        return \Bitrix\Main\Context::getCurrent()->getRequest()->isAdminSection();
+    }
+
+    public static function checkBasketItem($basketItem)
+    {
+        if (Helper::isAdminSection()) {
+            if (!$basketItem->getProductId()) {
+                return false;
+            }
+        } else {
+            if (!$basketItem->getId()) {
+                return false;
+            }
+        }
+
+        return true;
     }
 }
